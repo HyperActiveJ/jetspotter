@@ -5,25 +5,20 @@ import (
 	"jetspotter/internal/jetspotter"
 	"jetspotter/internal/metrics"
 	"jetspotter/internal/notification"
-	"jetspotter/internal/version"
-	"jetspotter/internal/web"
 	"log"
-	"strconv"
 	"time"
+	"fmt"
 )
-
-// Global channel to indicate when the first data fetch is complete
-var dataReadyChan = make(chan bool, 1)
 
 func exitWithError(err error) {
 	log.Fatalf("Something went wrong: %v\n", err)
 }
 
-func sendNotifications(aircraft []jetspotter.Aircraft, config configuration.Config) error {
+func sendNotifications(aircraft []jetspotter.AircraftOutput, config configuration.Config) error {
 	sortedAircraft := jetspotter.SortByDistance(aircraft)
 
 	if len(aircraft) < 1 {
-		log.Println("No new matching aircraft have been spotted.")
+		//log.Println("No new matching aircraft have been spotted.")
 		return nil
 	}
 
@@ -65,51 +60,36 @@ func sendNotifications(aircraft []jetspotter.Aircraft, config configuration.Conf
 	return nil
 }
 
-func jetspotterHandler(alreadySpottedAircraft *[]jetspotter.Aircraft, config configuration.Config, isFirstRun bool) {
-	aircraft, err := jetspotter.HandleAircraft(alreadySpottedAircraft, config)
+func jetspotterHandler(alreadySpottedAircraft *[]jetspotter.Aircraft, config configuration.Config) {
+	//aircraft, err := jetspotter.HandleAircraft(alreadySpottedAircraft, config)
+	_, err := jetspotter.HandleAircraft(alreadySpottedAircraft, config)
 	if err != nil {
+		log.Printf("handel")
 		exitWithError(err)
 	}
 
-	err = sendNotifications(aircraft, config)
-	if err != nil {
-		exitWithError(err)
-	}
-
-	// If this is the first successful data fetch, signal that data is ready
-	if isFirstRun {
-		// Signal that data is ready (use non-blocking send)
-		select {
-		case dataReadyChan <- true:
-			log.Println("Notified web UI that aircraft data is now available")
-		default:
-			// Channel already has a value or no receivers yet, that's fine
-		}
-	}
+	//err = sendNotifications(aircraft, config)
+	//if err != nil {
+	//	exitWithError(err)
+	//}
 }
 
 func HandleJetspotter(config configuration.Config) {
-	if config.MaxScanRangeKilometers > config.MaxRangeKilometers {
-		log.Printf("Scanning for aircraft within %d kilometers, sending notifications for those within %d kilometers: %s",
-			config.MaxScanRangeKilometers, config.MaxRangeKilometers, config.AircraftTypes)
-	} else {
-		log.Printf("Spotting the following aircraft types within %d kilometers: %s",
-			config.MaxRangeKilometers, config.AircraftTypes)
+	if config.PrintStartup > 0{
+		log.Printf("Requesting aircraft out %d kilometers", config.MaxRangeKilometersR)
+		log.Printf("Looking For Interesting aircraft out %d kilometers from 0 to %d feet", config.MaxRangeKilometers, config.MaxAltitudeFeet)
+		fmt.Printf("Including: %s \r\nExcluding: %s\r\n", config.AircraftTypes, config.AircraftTypesExcl)
+		fmt.Printf("Also out %d kilometers from %d to %d feet \r\nAdditionally excluding: %s\r\n",  config.MaxRangeKilometers2, config.MaxAltitudeFeet, config.MaxAltitudeFeet2,  config.AircraftTypesExcl2)
+		fmt.Printf("Also excluding from logs: %s\r\n", config.AircraftTypesKnownInteresting)
 	}
-
-	if config.MaxAltitudeFeet > 0 {
-		log.Printf("Only showing aircraft at or below %d feet.", config.MaxAltitudeFeet)
-	}
-
 	var alreadySpottedAircraft []jetspotter.Aircraft
-	isFirstRun := true
-
 	for {
-		jetspotterHandler(&alreadySpottedAircraft, config, isFirstRun)
-		if isFirstRun {
-			isFirstRun = false
+		jetspotterHandler(&alreadySpottedAircraft, config)
+		time.Sleep(time.Duration(config.FetchInterval) * time.Second/2)
+		if config.RunOnce > 0{
+			return
 		}
-		time.Sleep(time.Duration(config.FetchInterval) * time.Second)
+
 	}
 }
 
@@ -122,64 +102,12 @@ func HandleMetrics(config configuration.Config) {
 	}()
 }
 
-func HandleAPI(config configuration.Config) {
-	jetspotter.SetupAPI(config.APIPort, config)
-}
-
-func HandleWebUI(config configuration.Config) {
-	if !config.WebUIEnabled {
-		return
-	}
-
-	go func() {
-		// Convert port string to int
-		port, err := strconv.Atoi(config.WebUIPort)
-		if err != nil {
-			log.Printf("Invalid web UI port: %s, using default: 8080", config.WebUIPort)
-			port = 8080
-		}
-
-		// Set up API endpoint - we'll use localhost with the API port
-		apiEndpoint := "http://localhost:" + config.APIPort
-
-		// Configure and start the web server
-		webConfig := web.Config{
-			ListenPort:    port,
-			APIEndpoint:   apiEndpoint,
-			RefreshPeriod: time.Duration(config.FetchInterval) * time.Second,
-			DataReadyChan: dataReadyChan, // Pass the channel to the web server
-		}
-
-		webServer := web.NewServer(webConfig)
-		if err := webServer.Start(); err != nil {
-			log.Printf("Web UI server error: %v", err)
-		}
-	}()
-}
-
 func main() {
-	// Display a professional version banner at startup
-	versionBanner := `
-  ╔════════════════════════════════════════════════════════╗
-  ║                      JETSPOTTER                        ║
-  ╠════════════════════════════════════════════════════════╣
-  ║  Version: %-10s                                   ║
-  ║  Commit:  %-10s                                   ║
-  ║  Built:   %-10s                                   ║
-  ╚════════════════════════════════════════════════════════╝
-`
-	log.Printf(versionBanner, version.Version, version.Commit, version.BuildTime)
-
 	config, err := configuration.GetConfig()
 	if err != nil {
+		log.Printf("config")
 		exitWithError(err)
 	}
-
-	// Start services
-	HandleMetrics(config)
-	HandleAPI(config)
-	HandleWebUI(config)
-
-	// Start the main aircraft tracking loop
+	//HandleMetrics(config)
 	HandleJetspotter(config)
 }
